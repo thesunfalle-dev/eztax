@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eztax</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Exo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="true"></div>
+
+    <main class="app-shell">
+      <nav class="app-nav" id="appNav" aria-label="Шапка">
+        <a class="brand" href="/" aria-label="Eztax">
+          <span>Eztax</span>
+          <small id="brandCountry">GE</small>
+        </a>
+        <div class="nav-actions quick-actions" aria-label="Действия">
+          <button class="primary-button" id="openAddDialog" type="button">
+            <span class="plus" aria-hidden="true">
+              <svg viewBox="0 0 20 20">
+                <path d="M10 5v10M5 10h10" />
+              </svg>
+            </span>
+            Добавить
+          </button>
+          <button class="avatar-button" id="profileButton" type="button" title="Профиль" aria-label="Открыть профиль">
+            <span id="avatarInitial">?</span>
+          </button>
+        </div>
+      </nav>
+
+      <section id="homeView">
+        <section class="summary-grid" id="overview" aria-label="Итоги">
+          <article class="metric-card metric-usd">
+            <div class="metric-copy">
+              <div class="metric-head">
+                <span class="metric-icon" aria-hidden="true">$</span>
+                <span id="incomeMetricLabel">USD</span>
+              </div>
+              <strong id="totalUsd">$0.00</strong>
+              <small id="currentRateNote">Курс обновляется...</small>
+            </div>
+            <button class="sparkline-button" id="usdSparkline" type="button" aria-label="Открыть график USD"></button>
+          </article>
+          <article class="metric-card metric-gel">
+            <div class="metric-copy">
+              <div class="metric-head">
+                <span class="metric-icon" id="localMetricIcon" aria-hidden="true">₾</span>
+                <span id="localMetricLabel">GEL</span>
+              </div>
+              <strong id="totalGel">₾0.00</strong>
+            </div>
+            <button class="sparkline-button" id="gelSparkline" type="button" aria-label="Открыть график GEL"></button>
+          </article>
+          <article class="metric-card metric-tax">
+            <div class="metric-copy">
+              <div class="metric-head">
+                <span class="metric-icon" aria-hidden="true">%</span>
+                <span id="taxMetricLabel">Налог 1%</span>
+              </div>
+              <strong id="totalTax">₾0.00</strong>
+            </div>
+            <button class="sparkline-button" id="taxSparkline" type="button" aria-label="Открыть график налога"></button>
+          </article>
+        </section>
+
+        <section class="filters" id="filters" aria-label="Период">
+          <h2 class="records-title">Ваши записи</h2>
+          <label for="yearFilter">
+            <span>Год</span>
+            <select id="yearFilter" name="yearFilter" aria-label="Год"></select>
+          </label>
+          <label for="monthFilter">
+            <span>Месяц</span>
+            <select id="monthFilter" name="monthFilter" aria-label="Месяц"></select>
+          </label>
+          <button class="round-button export-button" id="exportButton" type="button" title="Экспорт CSV" aria-label="Экспорт CSV">
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M10 3v9" />
+              <path d="m6.5 8.5 3.5 3.5 3.5-3.5" />
+              <path d="M4 15.5h12" />
+            </svg>
+          </button>
+        </section>
+
+        <section class="table-wrap" id="records" aria-label="Ежемесячные данные">
+          <table>
+            <thead>
+              <tr>
+                <th>Месяц</th>
+                <th id="incomeTableHead">USD</th>
+                <th id="localTableHead">GEL</th>
+                <th>Налог</th>
+                <th class="meta-column">Курс</th>
+                <th class="row-actions"></th>
+              </tr>
+            </thead>
+            <tbody id="entriesBody"></tbody>
+          </table>
+          <div class="empty-state" id="emptyState">
+            <strong>Пока нет записей</strong>
+            <span>Добавь первый месяц, и следующий будет подставляться автоматически.</span>
+            <button class="primary-button empty-add-button" id="emptyAddDialog" type="button">
+              <span class="plus" aria-hidden="true">
+                <svg viewBox="0 0 20 20">
+                  <path d="M10 5v10M5 10h10" />
+                </svg>
+              </span>
+              Добавить
+            </button>
+          </div>
+          <div class="load-more" id="loadMore" hidden>
+            <span id="loadMoreStatus"></span>
+            <button class="ghost-button" id="loadMoreButton" type="button">Показать еще</button>
+          </div>
+        </section>
+      </section>
+
+      <section class="chart-view" id="chartView" hidden>
+        <header class="chart-header">
+          <button class="back-icon-button" id="backToHome" type="button" title="Назад" aria-label="Назад">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
+          <div>
+            <h1 id="chartTitle">Всего</h1>
+            <p id="chartSummary"></p>
+          </div>
+        </header>
+
+        <section class="filters chart-filters" aria-label="Период графика">
+          <label for="chartYearFilter">
+            <span>Год</span>
+            <select id="chartYearFilter" name="chartYearFilter" aria-label="Год графика"></select>
+          </label>
+          <label for="chartMonthFilter">
+            <span>Месяц</span>
+            <select id="chartMonthFilter" name="chartMonthFilter" aria-label="Месяц графика"></select>
+          </label>
+          <button class="ghost-button" id="resetChartFilters" type="button">Сбросить</button>
+        </section>
+
+        <section class="chart-panel" aria-label="Подробный график">
+          <div id="detailChart"></div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="entryDialog">
+      <form method="dialog" class="dialog-card" id="entryForm">
+        <header>
+          <div>
+            <h2 id="entryDialogTitle">Добавить поступление</h2>
+          </div>
+          <button class="icon-button" id="closeDialog" type="button" title="Закрыть" aria-label="Закрыть">×</button>
+        </header>
+
+        <label id="usdField">
+          <span id="amountLabel">Сумма в USD</span>
+          <input id="usdInput" name="incomeAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="2500.00" />
+        </label>
+
+        <label>
+          <span>Дата поступления</span>
+          <input id="dateInput" name="receivedDate" type="date" required />
+        </label>
+
+        <label id="gelPreviewField">
+          <span id="localPreviewLabel">GEL</span>
+          <span class="input-action">
+            <input id="gelPreviewInput" type="text" readonly aria-label="Расчетная сумма в локальной валюте" />
+            <button class="field-icon-button" id="refreshGel" type="button" title="Пересчитать" aria-label="Пересчитать">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 12a9 9 0 0 1 15.74-6.26L21 8" />
+                <path d="M21 3v5h-5" />
+                <path d="M21 12a9 9 0 0 1-15.74 6.26L3 16" />
+                <path d="M3 21v-5h5" />
+              </svg>
+            </button>
+          </span>
+        </label>
+
+        <p class="form-error" id="formError" role="alert"></p>
+
+        <footer>
+          <button class="ghost-button" id="cancelDialog" type="button">Отмена</button>
+          <button class="primary-button" id="submitEntry" type="submit">Добавить</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="profileDialog">
+      <form method="dialog" class="dialog-card" id="profileForm">
+        <header>
+          <div>
+            <h2 id="profileDialogTitle">Профиль</h2>
+          </div>
+          <button class="icon-button" id="closeProfileDialog" type="button" title="Закрыть" aria-label="Закрыть">×</button>
+        </header>
+
+        <label>
+          <span>Имя</span>
+          <input id="profileNameInput" name="name" type="text" autocomplete="name" placeholder="Имя" required />
+        </label>
+
+        <div class="choice-field">
+          <span>Страна налогообложения</span>
+          <input id="profileCountryInput" name="country" type="hidden" value="GE" />
+          <div class="chip-group" role="group" aria-label="Страна налогообложения">
+            <button class="choice-chip" type="button" data-profile-option="country" data-value="GE" aria-pressed="true">
+              Грузия
+            </button>
+            <button class="choice-chip" type="button" data-profile-option="country" data-value="BY" aria-pressed="false">
+              Беларусь
+            </button>
+          </div>
+        </div>
+
+        <div class="choice-field">
+          <span>Валюта дохода</span>
+          <input id="profileCurrencyInput" name="incomeCurrency" type="hidden" value="USD" />
+          <div class="chip-group" role="group" aria-label="Валюта дохода">
+            <button class="choice-chip" type="button" data-profile-option="incomeCurrency" data-value="USD" aria-pressed="true">
+              USD
+            </button>
+            <button class="choice-chip" type="button" data-profile-option="incomeCurrency" data-value="EUR" aria-pressed="false">
+              EUR
+            </button>
+          </div>
+        </div>
+
+        <p class="form-error" id="profileFormError" role="alert"></p>
+
+        <footer>
+          <button class="ghost-button" id="cancelProfileDialog" type="button">Отмена</button>
+          <button class="primary-button" id="saveProfile" type="submit">Сохранить</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="deleteDialog">
+      <form method="dialog" class="dialog-card confirm-card" id="deleteForm">
+        <header>
+          <div>
+            <h2>Удалить запись?</h2>
+            <p id="deleteMessage">Это действие нельзя отменить.</p>
+          </div>
+          <button class="icon-button" id="closeDeleteDialog" type="button" title="Закрыть" aria-label="Закрыть">×</button>
+        </header>
+
+        <footer>
+          <button class="ghost-button" id="cancelDelete" type="button">Отмена</button>
+          <button class="danger-button" id="confirmDelete" type="submit">Удалить</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <script src="/app.js?v=20260515-floating-fields-1" type="module"></script>
+  </body>
+</html>
