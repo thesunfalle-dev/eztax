@@ -103,9 +103,14 @@ async function readLocalEntries(clientId = defaultClientId) {
 
 async function writeLocalEntries(entries, clientId = defaultClientId) {
   const sorted = [...entries].map(normalizeEntry).sort((a, b) => a.month.localeCompare(b.month));
-  await writeJson(clientDataFile(clientId, "entries.json"), sorted);
-  if (clientId === defaultClientId) {
-    await writeJson(dataFile, sorted);
+  try {
+    await writeJson(clientDataFile(clientId, "entries.json"), sorted);
+    if (clientId === defaultClientId) {
+      await writeJson(dataFile, sorted);
+    }
+  } catch (error) {
+    if (!useSupabase) throw error;
+    console.warn("Local entries backup was skipped:", error);
   }
   return sorted;
 }
@@ -119,9 +124,14 @@ async function readLocalProfile(clientId = defaultClientId) {
 
 async function writeLocalProfile(profile, clientId = defaultClientId) {
   const saved = normalizeProfile(profile);
-  await writeJson(clientDataFile(clientId, "profile.json"), saved);
-  if (clientId === defaultClientId) {
-    await writeJson(profileFile, saved);
+  try {
+    await writeJson(clientDataFile(clientId, "profile.json"), saved);
+    if (clientId === defaultClientId) {
+      await writeJson(profileFile, saved);
+    }
+  } catch (error) {
+    if (!useSupabase) throw error;
+    console.warn("Local profile backup was skipped:", error);
   }
   return saved;
 }
