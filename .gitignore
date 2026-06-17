@@ -1,5 +1,6 @@
 node_modules/
 .DS_Store
 data/*.json
+data/clients/
 .env
 .env.local

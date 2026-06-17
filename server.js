@@ -5,6 +5,7 @@ import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import crypto from "node:crypto";
+import * as XLSX from "xlsx";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +33,7 @@ const dataDir = path.join(__dirname, "data");
 const dataFile = path.join(dataDir, "entries.json");
 const rateCacheFile = path.join(dataDir, "rates.json");
 const profileFile = path.join(dataDir, "profile.json");
+const clientsDataDir = path.join(dataDir, "clients");
 const port = Number(process.env.PORT || 3000);
 const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
 const supabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -65,12 +67,63 @@ const mimeTypes = {
 };
 
 async function ensureJsonFile(filePath, initialValue) {
-  await mkdir(dataDir, { recursive: true });
+  await mkdir(path.dirname(filePath), { recursive: true });
   try {
     await stat(filePath);
   } catch {
     await writeFile(filePath, `${JSON.stringify(initialValue, null, 2)}\n`, "utf8");
   }
+}
+
+function clientDataFile(clientId, fileName) {
+  const safeClientId = normalizeClientId(clientId);
+  return path.join(clientsDataDir, safeClientId, fileName);
+}
+
+async function readOptionalJson(filePath) {
+  try {
+    const raw = await readFile(filePath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function writeJson(filePath, value) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function readLocalEntries(clientId = defaultClientId) {
+  const scoped = await readOptionalJson(clientDataFile(clientId, "entries.json"));
+  if (Array.isArray(scoped)) return scoped;
+  const legacy = await readOptionalJson(dataFile);
+  return Array.isArray(legacy) ? legacy : [];
+}
+
+async function writeLocalEntries(entries, clientId = defaultClientId) {
+  const sorted = [...entries].map(normalizeEntry).sort((a, b) => a.month.localeCompare(b.month));
+  await writeJson(clientDataFile(clientId, "entries.json"), sorted);
+  if (clientId === defaultClientId) {
+    await writeJson(dataFile, sorted);
+  }
+  return sorted;
+}
+
+async function readLocalProfile(clientId = defaultClientId) {
+  const scoped = await readOptionalJson(clientDataFile(clientId, "profile.json"));
+  if (scoped) return normalizeProfile(scoped);
+  const legacy = await readOptionalJson(profileFile);
+  return legacy ? normalizeProfile(legacy) : null;
+}
+
+async function writeLocalProfile(profile, clientId = defaultClientId) {
+  const saved = normalizeProfile(profile);
+  await writeJson(clientDataFile(clientId, "profile.json"), saved);
+  if (clientId === defaultClientId) {
+    await writeJson(profileFile, saved);
+  }
+  return saved;
 }
 
 function normalizeClientId(value) {
@@ -182,37 +235,76 @@ function fromDbEntry(entry) {
 
 async function readEntries(clientId = defaultClientId) {
   if (useSupabase) {
-    const rows = await supabaseRequest(
-      `entries?client_id=eq.${encodeURIComponent(clientId)}&select=*&order=month.asc`,
-    );
-    return rows.map(fromDbEntry);
+    try {
+      const rows = await supabaseRequest(
+        `entries?client_id=eq.${encodeURIComponent(clientId)}&select=*&order=month.asc`,
+      );
+      const remoteEntries = rows.map(fromDbEntry).sort((a, b) => a.month.localeCompare(b.month));
+      if (remoteEntries.length > 0) {
+        await writeLocalEntries(remoteEntries, clientId);
+        return remoteEntries;
+      }
+
+      const localEntries = await readLocalEntries(clientId);
+      if (localEntries.length > 0) {
+        return writeEntries(localEntries, clientId);
+      }
+      return [];
+    } catch (error) {
+      console.warn(error);
+      return readLocalEntries(clientId);
+    }
   }
 
   await ensureJsonFile(dataFile, []);
-  const raw = await readFile(dataFile, "utf8");
-  return JSON.parse(raw);
+  return readLocalEntries(clientId);
 }
 
 async function writeEntries(entries, clientId = defaultClientId) {
-  const sorted = [...entries].sort((a, b) => a.month.localeCompare(b.month));
+  const sorted = [...entries].map(normalizeEntry).sort((a, b) => a.month.localeCompare(b.month));
+  await writeLocalEntries(sorted, clientId);
 
   if (useSupabase) {
-    await supabaseRequest(`entries?client_id=eq.${encodeURIComponent(clientId)}`, {
-      method: "DELETE",
-    });
+    try {
+      const localProfile = await readLocalProfile(clientId);
+      if (localProfile) {
+        await supabaseRequest("profiles?on_conflict=client_id", {
+          method: "POST",
+          headers: { prefer: "resolution=merge-duplicates" },
+          body: JSON.stringify(toDbProfile(localProfile, clientId)),
+        });
+      }
 
-    if (sorted.length === 0) return [];
+      await supabaseRequest(`entries?client_id=eq.${encodeURIComponent(clientId)}`, {
+        method: "DELETE",
+      });
 
-    const rows = await supabaseRequest("entries", {
-      method: "POST",
-      headers: { prefer: "return=representation" },
-      body: JSON.stringify(sorted.map((entry) => toDbEntry(entry, clientId))),
-    });
-    return rows.map(fromDbEntry).sort((a, b) => a.month.localeCompare(b.month));
+      if (sorted.length === 0) return [];
+
+      let rows;
+      try {
+        rows = await supabaseRequest("entries", {
+          method: "POST",
+          headers: { prefer: "return=representation" },
+          body: JSON.stringify(sorted.map((entry) => toDbEntry(entry, clientId))),
+        });
+      } catch (error) {
+        if (!String(error.message || "").includes("entries_pkey")) throw error;
+        rows = await supabaseRequest("entries", {
+          method: "POST",
+          headers: { prefer: "return=representation" },
+          body: JSON.stringify(sorted.map((entry) => toDbEntry({ ...entry, id: crypto.randomUUID() }, clientId))),
+        });
+      }
+      const saved = rows.map(fromDbEntry).sort((a, b) => a.month.localeCompare(b.month));
+      await writeLocalEntries(saved, clientId);
+      return saved;
+    } catch (error) {
+      console.warn(error);
+      return sorted;
+    }
   }
 
-  await ensureJsonFile(dataFile, []);
-  await writeFile(dataFile, `${JSON.stringify(sorted, null, 2)}\n`, "utf8");
   return sorted;
 }
 
@@ -249,32 +341,51 @@ async function writeRateCache(cache) {
 
 async function readProfile(clientId = defaultClientId) {
   if (useSupabase) {
-    const rows = await supabaseRequest(
-      `profiles?client_id=eq.${encodeURIComponent(clientId)}&select=*&limit=1`,
-    );
-    return rows[0] ? normalizeProfile(fromDbProfile(rows[0])) : null;
+    try {
+      const rows = await supabaseRequest(
+        `profiles?client_id=eq.${encodeURIComponent(clientId)}&select=*&limit=1`,
+      );
+      if (rows[0]) {
+        const remoteProfile = normalizeProfile(fromDbProfile(rows[0]));
+        await writeLocalProfile(remoteProfile, clientId);
+        return remoteProfile;
+      }
+
+      const localProfile = await readLocalProfile(clientId);
+      if (localProfile) {
+        await writeProfile(localProfile, clientId);
+      }
+      return localProfile;
+    } catch (error) {
+      console.warn(error);
+      return readLocalProfile(clientId);
+    }
   }
 
   await ensureJsonFile(profileFile, null);
-  const raw = await readFile(profileFile, "utf8");
-  const profile = JSON.parse(raw);
-  return profile ? normalizeProfile(profile) : null;
+  return readLocalProfile(clientId);
 }
 
 async function writeProfile(profile, clientId = defaultClientId) {
   const saved = normalizeProfile(profile);
+  await writeLocalProfile(saved, clientId);
 
   if (useSupabase) {
-    const rows = await supabaseRequest("profiles?on_conflict=client_id", {
-      method: "POST",
-      headers: { prefer: "resolution=merge-duplicates,return=representation" },
-      body: JSON.stringify(toDbProfile(saved, clientId)),
-    });
-    return normalizeProfile(fromDbProfile(rows[0]));
+    try {
+      const rows = await supabaseRequest("profiles?on_conflict=client_id", {
+        method: "POST",
+        headers: { prefer: "resolution=merge-duplicates,return=representation" },
+        body: JSON.stringify(toDbProfile(saved, clientId)),
+      });
+      const remoteProfile = normalizeProfile(fromDbProfile(rows[0]));
+      await writeLocalProfile(remoteProfile, clientId);
+      return remoteProfile;
+    } catch (error) {
+      console.warn(error);
+      return saved;
+    }
   }
 
-  await ensureJsonFile(profileFile, null);
-  await writeFile(profileFile, `${JSON.stringify(saved, null, 2)}\n`, "utf8");
   return saved;
 }
 
@@ -321,6 +432,260 @@ function validateAmount(value, fieldName) {
     throw new Error(`${fieldName} must be a positive number.`);
   }
   return numeric;
+}
+
+function optionalAmount(value) {
+  if (value == null || value === "") return null;
+  const normalized = String(value)
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/[₾$€Br₽рубgelusdeurbyntax%]/gi, "")
+    .replace(",", ".");
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeHeader(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ");
+}
+
+function getField(row, candidates) {
+  const normalizedCandidates = candidates.map(normalizeHeader);
+  for (const [key, value] of Object.entries(row)) {
+    if (normalizedCandidates.includes(normalizeHeader(key))) return value;
+  }
+  return undefined;
+}
+
+function parseCsv(text) {
+  const firstLine = text.split(/\r?\n/, 1)[0] || "";
+  const delimiter = firstLine.includes(";") && !firstLine.includes(",") ? ";" : ",";
+  const rows = [];
+  let cell = "";
+  let row = [];
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === delimiter && !quoted) {
+      row.push(cell);
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell);
+      if (row.some((item) => String(item).trim())) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  if (row.some((item) => String(item).trim())) rows.push(row);
+  if (rows.length < 2) return [];
+  const headers = rows[0].map((header) => String(header || "").trim());
+  return rows.slice(1).map((cells) =>
+    Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""])),
+  );
+}
+
+function normalizeImportedDate(value, fallbackYear) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      return `${parsed.y}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
+    }
+  }
+
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return isValidDate(text) ? text : null;
+  if (/^\d{4}-\d{2}$/.test(text)) return `${text}-01`;
+
+  const dotted = text.match(/^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?$/);
+  if (dotted) {
+    const day = String(dotted[1]).padStart(2, "0");
+    const month = String(dotted[2]).padStart(2, "0");
+    const rawYear = dotted[3] || fallbackYear;
+    if (!rawYear) return null;
+    const year = String(rawYear).length === 2 ? `20${rawYear}` : String(rawYear);
+    const date = `${year}-${month}-${day}`;
+    return isValidDate(date) ? date : null;
+  }
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return null;
+}
+
+function parseJsonImport(buffer) {
+  const payload = JSON.parse(buffer.toString("utf8"));
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.entries)) return payload.entries;
+  throw new Error("JSON must contain an entries array.");
+}
+
+function parseTabularImport(buffer, fileName) {
+  const lowerName = fileName.toLowerCase();
+  if (lowerName.endsWith(".json")) return parseJsonImport(buffer);
+  if (lowerName.endsWith(".csv")) return parseCsv(buffer.toString("utf8"));
+
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+  const rows = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const sheetRows = XLSX.utils.sheet_to_json(sheet, { defval: "", raw: true });
+    const fallbackYear = sheetName.match(/\b(20\d{2})\b/)?.[1];
+    rows.push(...sheetRows.map((row) => ({ ...row, __sheetYear: fallbackYear })));
+  }
+  return rows;
+}
+
+async function importedRowToEntry(row, profile) {
+  const country = normalizeCountry(getField(row, ["country", "страна"]) || profile.country);
+  const config = countryConfigs[country];
+  const incomeCurrency = normalizeIncomeCurrency(
+    getField(row, ["incomeCurrency", "income currency", "валюта дохода"]) || profile.incomeCurrency,
+  );
+  const localCurrency = String(
+    getField(row, ["localCurrency", "local currency", "валюта", "локальная валюта"]) || config.localCurrency,
+  ).trim().toUpperCase();
+  const fallbackYear = row.__sheetYear;
+  const receivedDate = normalizeImportedDate(
+    getField(row, ["receivedDate", "received date", "date", "дата", "дата поступления", "месяц"]),
+    fallbackYear,
+  );
+  const month =
+    String(getField(row, ["month", "месяц"]) || "").match(/^\d{4}-\d{2}$/)?.[0] ||
+    receivedDate?.slice(0, 7);
+
+  if (!month || !receivedDate || !isValidMonth(month) || !isValidDate(receivedDate)) return null;
+
+  const localAmount = optionalAmount(
+    getField(row, [
+      "localAmount",
+      "local amount",
+      "gelAmount",
+      "gel amount",
+      "bynAmount",
+      "byn amount",
+      "GEL",
+      "BYN",
+      "полная сумма в GEL",
+      "сумма в GEL",
+      "сумма GEL",
+      "лари",
+    ]),
+  );
+  const incomeAmount = optionalAmount(
+    getField(row, [
+      "incomeAmount",
+      "income amount",
+      "usdAmount",
+      "usd amount",
+      "eurAmount",
+      "eur amount",
+      "estimatedIncome",
+      "USD",
+      "EUR",
+      "сумма в USD",
+      "сумма USD",
+      "сумма в EUR",
+      "сумма EUR",
+      "доход",
+    ]),
+  );
+  let rate = optionalAmount(getField(row, ["rate", "курс"]));
+  let calculatedLocalAmount = localAmount;
+
+  if (!calculatedLocalAmount && incomeAmount) {
+    const ratePayload = await getRate(country, incomeCurrency, receivedDate);
+    rate = ratePayload.rate;
+    calculatedLocalAmount = toMoney(incomeAmount * ratePayload.rate);
+  }
+  if (!rate && calculatedLocalAmount && incomeAmount) {
+    rate = toRate(calculatedLocalAmount / incomeAmount);
+  }
+  if (!calculatedLocalAmount) return null;
+
+  const taxLocal =
+    optionalAmount(getField(row, ["taxLocal", "tax local", "taxGel", "tax gel", "налог", "налог 1%", "налог 10%"])) ??
+    toMoney(calculatedLocalAmount * config.taxRate);
+
+  return normalizeEntry({
+    id: String(getField(row, ["id"]) || "").trim() || crypto.randomUUID(),
+    month,
+    receivedDate,
+    country,
+    incomeCurrency,
+    localCurrency: localCurrency === "BYN" || localCurrency === "GEL" ? localCurrency : config.localCurrency,
+    incomeAmount,
+    localAmount: calculatedLocalAmount,
+    taxLocal,
+    taxRate: optionalAmount(getField(row, ["taxRate", "tax rate", "ставка налога"])) ?? config.taxRate,
+    rate,
+    rateDate: normalizeImportedDate(getField(row, ["rateDate", "rate date", "дата курса"]), fallbackYear) || receivedDate,
+    source: "import",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+async function importEntriesFromFile({ fileName, data }, profile, clientId) {
+  const buffer = Buffer.from(String(data || ""), "base64");
+  if (!buffer.length) throw new Error("Import file is empty.");
+
+  const rows = parseTabularImport(buffer, fileName);
+  const importedEntries = [];
+  for (const row of rows) {
+    try {
+      const entry = await importedRowToEntry(row, profile);
+      if (entry) importedEntries.push(entry);
+    } catch {
+      // Skip malformed rows and report the final skipped count.
+    }
+  }
+
+  const existingEntries = (await readEntries(clientId)).map(normalizeEntry);
+  const byKey = new Map(existingEntries.map((entry) => [`${entry.country}:${entry.incomeCurrency}:${entry.month}`, entry]));
+  let added = 0;
+  let updated = 0;
+
+  for (const entry of importedEntries) {
+    const key = `${entry.country}:${entry.incomeCurrency}:${entry.month}`;
+    if (byKey.has(key)) updated += 1;
+    else added += 1;
+    byKey.set(key, {
+      ...byKey.get(key),
+      ...entry,
+      id: byKey.get(key)?.id || entry.id,
+      createdAt: byKey.get(key)?.createdAt || entry.createdAt,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  const saved = await writeEntries([...byKey.values()], clientId);
+  return {
+    entries: saved.map(normalizeEntry),
+    imported: importedEntries.length,
+    added,
+    updated,
+    skipped: Math.max(0, rows.length - importedEntries.length),
+  };
 }
 
 function normalizeCountry(value) {
@@ -728,6 +1093,29 @@ async function handleApi(req, res, pathname) {
 
     const nextEntries = await writeEntries([...entries, entry], clientId);
     sendJson(res, 201, { entry, entries: nextEntries.map(normalizeEntry) });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/entries/import") {
+    const profile = await readProfile(clientId);
+    if (!profile) {
+      sendJson(res, 409, { error: "Complete signup before importing entries." });
+      return;
+    }
+
+    try {
+      const body = await readBody(req);
+      const fileName = String(body.fileName || "").trim();
+      if (!/\.(csv|json|xlsx|xls)$/i.test(fileName)) {
+        sendJson(res, 400, { error: "Import supports CSV, JSON, XLSX and XLS files." });
+        return;
+      }
+
+      const result = await importEntriesFromFile(body, profile, clientId);
+      sendJson(res, 200, result);
+    } catch (error) {
+      sendJson(res, error.status || 400, { error: error.message });
+    }
     return;
   }
 

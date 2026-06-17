@@ -103,6 +103,9 @@ const els = {
   usdInput: document.querySelector("#usdInput"),
   gelPreviewInput: document.querySelector("#gelPreviewInput"),
   refreshGel: document.querySelector("#refreshGel"),
+  importDropzone: document.querySelector("#importDropzone"),
+  historyImportInput: document.querySelector("#historyImportInput"),
+  historyImportStatus: document.querySelector("#historyImportStatus"),
   formError: document.querySelector("#formError"),
   submitEntry: document.querySelector("#submitEntry"),
   deleteMessage: document.querySelector("#deleteMessage"),
@@ -267,6 +270,7 @@ function sourceLabel(entry) {
   if (entry.source === "nbg") return `НБГ, ${formatDate(entry.rateDate)}`;
   if (entry.source === "nbrb") return `НБРБ, ${formatDate(entry.rateDate)}`;
   if (entry.source === "legacy-xlsx") return "импорт";
+  if (entry.source === "import") return "импорт";
   return "вручную";
 }
 
@@ -797,6 +801,55 @@ async function deleteEntry(id) {
   showToast("Поступление удалено", "danger");
 }
 
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function resetImportStatus() {
+  els.historyImportInput.value = "";
+  els.importDropzone.classList.remove("is-dragging", "is-importing");
+  els.historyImportStatus.textContent = "Перетащи CSV, XLSX, XLS или JSON сюда";
+}
+
+async function importHistoryFile(file) {
+  if (!file) return;
+  els.formError.textContent = "";
+  els.importDropzone.classList.add("is-importing");
+  els.historyImportStatus.textContent = `Импортирую ${file.name}...`;
+
+  try {
+    const data = arrayBufferToBase64(await file.arrayBuffer());
+    const payload = await requestJson("/api/entries/import", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType: file.type,
+        data,
+      }),
+    });
+    state.entries = payload.entries;
+    resetVisibleRows();
+    state.filters = { year: "all", month: "all" };
+    render();
+    els.dialog.close();
+    showToast(
+      `История импортирована: ${payload.added} добавлено, ${payload.updated} обновлено, ${payload.skipped} пропущено`,
+    );
+  } catch (error) {
+    els.formError.textContent = error.message;
+    els.historyImportStatus.textContent = "Файл не удалось импортировать";
+  } finally {
+    els.importDropzone.classList.remove("is-importing", "is-dragging");
+    els.historyImportInput.value = "";
+  }
+}
+
 function setGelPreview(value) {
   els.gelPreviewInput.value = value == null ? "" : money(value, profileLocalCurrency());
   syncFloatingFields();
@@ -841,6 +894,7 @@ function openDialog() {
   els.usdInput.placeholder = "2500.00";
   setGelPreview(null);
   els.formError.textContent = "";
+  resetImportStatus();
   els.submitEntry.textContent = "Добавить";
   els.dialog.showModal();
   syncFloatingFields();
@@ -858,6 +912,7 @@ function openEditDialog(entry) {
   els.usdInput.placeholder = "2500.00";
   setGelPreview(entry.localAmount);
   els.formError.textContent = "";
+  resetImportStatus();
   els.submitEntry.textContent = "Сохранить";
   els.dialog.showModal();
   syncFloatingFields();
@@ -1039,6 +1094,28 @@ els.cancelDialog.addEventListener("click", () => {
 });
 els.form.addEventListener("submit", submitEntry);
 els.refreshGel.addEventListener("click", refreshGelPreview);
+els.importDropzone.addEventListener("click", () => els.historyImportInput.click());
+els.importDropzone.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    els.historyImportInput.click();
+  }
+});
+els.importDropzone.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  els.importDropzone.classList.add("is-dragging");
+});
+els.importDropzone.addEventListener("dragleave", () => {
+  els.importDropzone.classList.remove("is-dragging");
+});
+els.importDropzone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  els.importDropzone.classList.remove("is-dragging");
+  importHistoryFile(event.dataTransfer.files[0]);
+});
+els.historyImportInput.addEventListener("change", () => {
+  importHistoryFile(els.historyImportInput.files[0]);
+});
 els.deleteForm.addEventListener("submit", submitDelete);
 els.usdSparkline.addEventListener("click", () => openChart("usd"));
 els.gelSparkline.addEventListener("click", () => openChart("gel"));

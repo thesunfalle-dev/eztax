@@ -185,6 +185,21 @@
           </span>
         </label>
 
+        <div class="import-dropzone" id="importDropzone" role="button" tabindex="0" aria-label="Импортировать историю из файла">
+          <input id="historyImportInput" type="file" accept=".csv,.json,.xlsx,.xls" />
+          <span class="import-dropzone-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M12 4v11" />
+              <path d="m8 8 4-4 4 4" />
+              <path d="M5 16v2.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V16" />
+            </svg>
+          </span>
+          <span class="import-dropzone-copy">
+            <strong>Импорт истории</strong>
+            <small id="historyImportStatus">Перетащи CSV, XLSX, XLS или JSON сюда</small>
+          </span>
+        </div>
+
         <p class="form-error" id="formError" role="alert"></p>
 
         <footer>
@@ -260,6 +275,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=20260515-floating-fields-1" type="module"></script>
+    <script src="/app.js?v=20260617-import-backup-1" type="module"></script>
   </body>
 </html>
