@@ -95,15 +95,17 @@ Legacy `SUPABASE_SERVICE_ROLE_KEY` тоже поддерживается, есл
 
 ```text
 Build Command: пусто
-Output Directory: public
+Output Directory: пусто (не указывать public)
 Install Command: npm install
 Environment Variables:
 SUPABASE_URL=...
 SUPABASE_SECRET_KEY=...
 ```
 
-`Root Directory` должен оставаться корнем репозитория, а не `public/`: иначе
-Vercel опубликует интерфейс, но не развернет серверные маршруты из `api/`.
+`Root Directory` и `Output Directory` не должны указывать на `public/`:
+оставь `Root Directory` корнем репозитория, а `Output Directory` пустым.
+Тогда Vercel сам опубликует файлы из `public/` и развернет серверные маршруты
+из `api/`.
 
 ## Источник курса
 
