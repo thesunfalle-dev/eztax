@@ -15,6 +15,7 @@ const monthNames = [
 
 const rowBatchSize = 14;
 const clientIdStorageKey = "eztax.clientId";
+const backupStoragePrefix = "eztax.backup.v1.";
 const fallbackClientId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 const state = {
@@ -198,6 +199,39 @@ function getClientId() {
     return generated;
   } catch {
     return fallbackClientId;
+  }
+}
+
+function backupStorageKey() {
+  return `${backupStoragePrefix}${getClientId()}`;
+}
+
+function readBrowserBackup() {
+  try {
+    const backup = JSON.parse(localStorage.getItem(backupStorageKey()) || "null");
+    if (!backup?.profile || !Array.isArray(backup.entries)) return null;
+    return backup;
+  } catch {
+    return null;
+  }
+}
+
+function saveBrowserBackup() {
+  if (!state.profile || !Array.isArray(state.entries)) return;
+  try {
+    localStorage.setItem(
+      backupStorageKey(),
+      JSON.stringify({
+        version: 1,
+        savedAt: new Date().toISOString(),
+        profile: state.profile,
+        entries: state.entries,
+      }),
+    );
+  } catch (error) {
+    // The online copy remains authoritative; a full storage quota must not
+    // interrupt tax entry creation.
+    console.warn("Could not save the local backup", error);
   }
 }
 
@@ -778,6 +812,21 @@ async function loadProfile() {
   state.incomeCurrencies = payload.incomeCurrencies || state.incomeCurrencies;
 }
 
+async function restoreBrowserBackupIfNeeded() {
+  const backup = readBrowserBackup();
+  if (state.entries.length > 0 || !backup || backup.entries.length === 0) return false;
+
+  const payload = await requestJson("/api/backup/restore", {
+    method: "POST",
+    body: JSON.stringify({ profile: backup.profile, entries: backup.entries }),
+  });
+  state.profile = payload.profile;
+  state.entries = payload.entries;
+  saveBrowserBackup();
+  showToast("История автоматически восстановлена из резервной копии");
+  return true;
+}
+
 async function loadCurrentRate() {
   try {
     const payload = await requestJson(state.profile ? "/api/rates/latest" : "/api/rates/usd/latest");
@@ -796,6 +845,7 @@ async function loadRateForDate(date) {
 async function deleteEntry(id) {
   const payload = await requestJson(`/api/entries/${encodeURIComponent(id)}`, { method: "DELETE" });
   state.entries = payload.entries;
+  saveBrowserBackup();
   state.pendingDelete = null;
   render();
   showToast("Поступление удалено", "danger");
@@ -834,6 +884,7 @@ async function importHistoryFile(file) {
       }),
     });
     state.entries = payload.entries;
+    saveBrowserBackup();
     resetVisibleRows();
     state.filters = { year: "all", month: "all" };
     render();
@@ -943,6 +994,7 @@ async function submitEntry(event) {
     const method = state.editingEntry ? "PATCH" : "POST";
     const payload = await requestJson(url, { method, body: JSON.stringify(body) });
     state.entries = payload.entries;
+    saveBrowserBackup();
     const month = payload.entry.month.split("-")[1];
     state.filters.year = payload.entry.month.slice(0, 4);
     state.filters.month = month;
@@ -1059,6 +1111,7 @@ async function submitProfile(event) {
     state.profile = payload.profile;
     state.countries = payload.countries || state.countries;
     state.incomeCurrencies = payload.incomeCurrencies || state.incomeCurrencies;
+    saveBrowserBackup();
     state.filters = { year: "all", month: "all" };
     state.chartFilters = { year: "all", month: "all" };
     resetVisibleRows();
@@ -1170,6 +1223,8 @@ async function boot() {
 
   try {
     await loadEntries();
+    await restoreBrowserBackupIfNeeded();
+    saveBrowserBackup();
   } catch (error) {
     els.emptyState.classList.add("visible");
     els.emptyState.innerHTML = `<strong>Не удалось загрузить данные</strong><span>${error.message}</span>`;

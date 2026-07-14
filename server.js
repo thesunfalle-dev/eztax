@@ -1015,6 +1015,32 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  // Browser storage is the durable fallback for a Vercel deployment: its local
+  // filesystem can disappear between requests, while a user's browser survives
+  // a paused Supabase project. This endpoint is deliberately restore-only and
+  // refuses an empty history, so it cannot turn a deliberate deletion into a
+  // restore request that wipes remote data.
+  if (req.method === "POST" && pathname === "/api/backup/restore") {
+    try {
+      const body = await readBody(req);
+      if (!body.profile || !Array.isArray(body.entries) || body.entries.length === 0) {
+        sendJson(res, 400, { error: "Backup must contain a profile and at least one entry." });
+        return;
+      }
+      if (body.entries.length > 5000) {
+        sendJson(res, 400, { error: "Backup contains too many entries." });
+        return;
+      }
+
+      const profile = await writeProfile(body.profile, clientId);
+      const entries = await writeEntries(body.entries, clientId);
+      sendJson(res, 200, { profile, entries: entries.map(normalizeEntry) });
+    } catch (error) {
+      sendJson(res, 400, { error: error.message });
+    }
+    return;
+  }
+
   if (req.method === "GET" && pathname === "/api/rates/latest") {
     const rate = await getProfileRate(clientId, todayLocalDate(), { refresh: true });
     sendJson(res, 200, { rate });
