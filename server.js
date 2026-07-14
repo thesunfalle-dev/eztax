@@ -169,7 +169,10 @@ async function getRequestIdentity(req) {
 
 function requestOrigin(req) {
   const protocol = String(req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
-  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000").split(",")[0].trim();
+  // `host` is the public domain the browser reached. Vercel's forwarded host
+  // can instead point at an internal or preview alias, which would make the
+  // final OAuth redirect land on a Vercel 404 page.
+  const host = String(req.headers.host || req.headers["x-forwarded-host"] || "localhost:3000").split(",")[0].trim();
   return `${protocol}://${host}`;
 }
 
