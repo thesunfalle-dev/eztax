@@ -1122,19 +1122,27 @@ async function handleApi(req, res, pathname) {
     }
     const existingEntries = await readEntries(clientId);
     const existingProfile = await readProfile(clientId);
-    if (existingEntries.length > 0 || existingProfile) {
+    if (existingEntries.length > 0) {
       sendJson(res, 200, { profile: existingProfile, entries: existingEntries, claimed: false });
       return;
     }
     const body = await readBody(req);
     const backup = body.backup || {};
-    const sourceProfile = backup.profile || (await readProfile(identity.anonymousClientId));
-    const sourceEntries = Array.isArray(backup.entries) ? backup.entries : await readEntries(identity.anonymousClientId);
+    const anonymousProfile = await readProfile(identity.anonymousClientId);
+    const anonymousEntries = await readEntries(identity.anonymousClientId);
+    const backupEntries = Array.isArray(backup.entries) ? backup.entries : [];
+    const sourceProfile = existingProfile || backup.profile || anonymousProfile;
+    const entriesByMonth = new Map();
+    for (const entry of [...anonymousEntries, ...backupEntries]) {
+      const key = `${entry.country || "GE"}:${entry.incomeCurrency || "USD"}:${entry.month}`;
+      entriesByMonth.set(key, entry);
+    }
+    const sourceEntries = [...entriesByMonth.values()];
     if (!sourceProfile) {
       sendJson(res, 200, { profile: null, entries: [], claimed: false });
       return;
     }
-    const profile = await writeProfile(sourceProfile, clientId);
+    const profile = existingProfile || (await writeProfile(sourceProfile, clientId));
     const entries = await writeEntries(sourceEntries || [], clientId);
     sendJson(res, 200, { profile, entries, claimed: true });
     return;

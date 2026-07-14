@@ -1068,9 +1068,6 @@ async function submitEntry(event) {
     const payload = await requestJson(url, { method, body: JSON.stringify(body) });
     state.entries = payload.entries;
     saveBrowserBackup();
-    const month = payload.entry.month.split("-")[1];
-    state.filters.year = payload.entry.month.slice(0, 4);
-    state.filters.month = month;
     state.editingEntry = null;
     render();
     els.dialog.close();
