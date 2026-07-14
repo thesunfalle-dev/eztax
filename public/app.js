@@ -897,8 +897,8 @@ async function restoreBrowserBackupIfNeeded() {
   state.profile = payload.profile;
   state.entries = payload.entries;
   saveBrowserBackup();
-  showToast("История автоматически восстановлена из резервной копии");
-  return true;
+  if (payload.restored) showToast("История автоматически восстановлена из резервной копии");
+  return Boolean(payload.restored);
 }
 
 async function loadCurrentRate() {

@@ -326,28 +326,35 @@ async function writeEntries(entries, clientId = defaultClientId) {
         });
       }
 
-      await supabaseRequest(`entries?client_id=eq.${encodeURIComponent(clientId)}`, {
-        method: "DELETE",
-      });
-
       if (sorted.length === 0) return [];
 
       let rows;
       try {
-        rows = await supabaseRequest("entries", {
+        // Never replace an account's whole history here. Multiple requests can
+        // be in flight while a user adds several months; delete-and-reinsert
+        // makes those requests race and can leave only the last few rows.
+        // The database has a unique key for one entry per month, so upsert is
+        // both atomic and preserves every other historical entry.
+        rows = await supabaseRequest("entries?on_conflict=client_id,country,income_currency,month", {
           method: "POST",
-          headers: { prefer: "return=representation" },
+          headers: { prefer: "resolution=merge-duplicates,return=representation" },
           body: JSON.stringify(sorted.map((entry) => toDbEntry(entry, clientId))),
         });
       } catch (error) {
         if (!String(error.message || "").includes("entries_pkey")) throw error;
-        rows = await supabaseRequest("entries", {
+        rows = await supabaseRequest("entries?on_conflict=client_id,country,income_currency,month", {
           method: "POST",
-          headers: { prefer: "return=representation" },
+          headers: { prefer: "resolution=merge-duplicates,return=representation" },
           body: JSON.stringify(sorted.map((entry) => toDbEntry({ ...entry, id: crypto.randomUUID() }, clientId))),
         });
       }
-      const saved = rows.map(fromDbEntry).sort((a, b) => a.month.localeCompare(b.month));
+      // The upsert response contains only rows from this request. Reload the
+      // account before responding so the browser never replaces its state (or
+      // backup) with just the one newly added month.
+      const allRows = await supabaseRequest(
+        `entries?client_id=eq.${encodeURIComponent(clientId)}&select=*&order=month.asc`,
+      );
+      const saved = allRows.map(fromDbEntry).sort((a, b) => a.month.localeCompare(b.month));
       await writeLocalEntries(saved, clientId);
       return saved;
     } catch (error) {
@@ -1193,9 +1200,19 @@ async function handleApi(req, res, pathname) {
         return;
       }
 
+      const existingEntries = await readEntries(clientId);
+      if (existingEntries.length > 0) {
+        sendJson(res, 200, {
+          profile: await readProfile(clientId),
+          entries: existingEntries.map(normalizeEntry),
+          restored: false,
+        });
+        return;
+      }
+
       const profile = await writeProfile(body.profile, clientId);
       const entries = await writeEntries(body.entries, clientId);
-      sendJson(res, 200, { profile, entries: entries.map(normalizeEntry) });
+      sendJson(res, 200, { profile, entries: entries.map(normalizeEntry), restored: true });
     } catch (error) {
       sendJson(res, 400, { error: error.message });
     }
@@ -1439,7 +1456,22 @@ async function handleApi(req, res, pathname) {
       sendJson(res, 404, { error: "Entry not found." });
       return;
     }
-    const saved = await writeEntries(nextEntries, clientId);
+    if (useSupabase) {
+      try {
+        await supabaseRequest(
+          `entries?id=eq.${encodeURIComponent(id)}&client_id=eq.${encodeURIComponent(clientId)}`,
+          { method: "DELETE" },
+        );
+        await writeLocalEntries(nextEntries, clientId);
+      } catch (error) {
+        console.warn(error);
+        // Keep the local fallback behavior when Supabase is temporarily unavailable.
+        await writeLocalEntries(nextEntries, clientId);
+      }
+    } else {
+      await writeLocalEntries(nextEntries, clientId);
+    }
+    const saved = await readEntries(clientId);
     sendJson(res, 200, { entries: saved.map(normalizeEntry) });
     return;
   }
