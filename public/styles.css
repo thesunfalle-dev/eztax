@@ -81,11 +81,35 @@ a {
 }
 
 .toast.is-leaving {
+  animation: none;
   opacity: 0;
   transform: translateY(-8px);
   transition:
     opacity 140ms ease,
     transform 140ms ease;
+}
+
+.account-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+
+.account-section strong {
+  display: block;
+  font-size: 14px;
+}
+
+.account-section p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .toast span:last-child {

@@ -93,6 +93,7 @@ const els = {
   profileButton: document.querySelector("#profileButton"),
   signInButton: document.querySelector("#signInButton"),
   signOutButton: document.querySelector("#signOutButton"),
+  accountStatus: document.querySelector("#accountStatus"),
   avatarInitial: document.querySelector("#avatarInitial"),
   profileDialog: document.querySelector("#profileDialog"),
   profileForm: document.querySelector("#profileForm"),
@@ -318,6 +319,7 @@ function showToast(message, tone = "success") {
   window.setTimeout(() => {
     toast.classList.add("is-leaving");
     toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+    window.setTimeout(() => toast.remove(), 250);
   }, 5000);
 }
 
@@ -411,7 +413,7 @@ function showMoreRows() {
 }
 
 function populateFilterControls(yearEl, monthEl, filters) {
-  const years = [...new Set(activeEntries().map((entry) => entry.month.slice(0, 4)))].sort();
+  const years = [...new Set(activeEntries().map((entry) => entry.month.slice(0, 4)))].sort((a, b) => b.localeCompare(a));
   const currentYear = filters.year;
   const currentMonth = filters.month;
 
@@ -757,7 +759,6 @@ function renderProfileUi() {
   els.usdSparkline.setAttribute("aria-label", `Открыть график ${incomeCurrency}`);
   els.gelSparkline.setAttribute("aria-label", `Открыть график ${localCurrency}`);
   els.profileButton.hidden = !state.profile && !state.authSession;
-  els.signInButton.hidden = Boolean(state.authSession);
   els.signOutButton.hidden = !state.authSession;
   els.avatarInitial.textContent = state.profile?.name?.trim()?.[0]?.toUpperCase() || "?";
 }
@@ -1139,6 +1140,10 @@ function openProfileDialog(mode = "edit") {
   setProfileChoice("country", state.profile?.country || "GE");
   setProfileChoice("incomeCurrency", state.profile?.incomeCurrency || "USD");
   els.profileFormError.textContent = "";
+  els.accountStatus.textContent = state.authSession
+    ? "История привязана к этому Google-аккаунту и доступна на других устройствах."
+    : "Войди, чтобы хранить историю на всех устройствах.";
+  els.signInButton.hidden = Boolean(state.authSession);
   els.closeProfileDialog.hidden = isSignup;
   els.cancelProfileDialog.hidden = isSignup;
   els.saveProfile.textContent = isSignup ? "Продолжить" : "Сохранить";
