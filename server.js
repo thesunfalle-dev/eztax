@@ -1138,8 +1138,8 @@ async function handleApi(req, res, pathname) {
       entriesByMonth.set(key, entry);
     }
     const sourceEntries = [...entriesByMonth.values()];
-    if (!sourceProfile) {
-      sendJson(res, 200, { profile: null, entries: [], claimed: false });
+    if (!sourceProfile || sourceEntries.length === 0) {
+      sendJson(res, 200, { profile: existingProfile || null, entries: existingEntries, claimed: false });
       return;
     }
     const profile = existingProfile || (await writeProfile(sourceProfile, clientId));
