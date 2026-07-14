@@ -235,6 +235,17 @@ function captureAuthSessionFromUrl() {
   return true;
 }
 
+async function exchangeOAuthCodeFromUrl() {
+  const code = new URLSearchParams(window.location.search).get("code");
+  if (!code || state.authSession) return false;
+  const response = await fetch(`/api/auth/exchange?code=${encodeURIComponent(code)}`);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Could not complete Google sign-in.");
+  saveAuthSession(payload.session);
+  window.history.replaceState({}, document.title, window.location.pathname);
+  return true;
+}
+
 function readBrowserBackup() {
   try {
     const backup = JSON.parse(localStorage.getItem(backupStorageKey()) || "null");
@@ -1283,6 +1294,11 @@ initFloatingFields();
 
 async function boot() {
   captureAuthSessionFromUrl();
+  try {
+    await exchangeOAuthCodeFromUrl();
+  } catch (error) {
+    console.warn(error);
+  }
   await refreshAuthSession();
   try {
     await claimBrowserDataForAccount();

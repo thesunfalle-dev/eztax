@@ -176,6 +176,17 @@ function requestOrigin(req) {
   return `${protocol}://${host}`;
 }
 
+function readCookie(req, name) {
+  const cookies = String(req.headers.cookie || "").split(";");
+  const prefix = `${name}=`;
+  const value = cookies.map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(prefix));
+  return value ? decodeURIComponent(value.slice(prefix.length)) : null;
+}
+
+function pkceChallenge(verifier) {
+  return crypto.createHash("sha256").update(verifier).digest("base64url");
+}
+
 async function supabaseRequest(pathname, options = {}) {
   if (!supabaseUrl || !supabaseKey) {
     throw new Error("Supabase is not configured.");
@@ -1021,16 +1032,50 @@ async function handleApi(req, res, pathname) {
       return;
     }
     const authorizeUrl = new URL(`${supabaseUrl}/auth/v1/authorize`);
+    const verifier = crypto.randomBytes(32).toString("base64url");
     authorizeUrl.searchParams.set("provider", "google");
     authorizeUrl.searchParams.set("redirect_to", requestOrigin(req));
+    authorizeUrl.searchParams.set("code_challenge", pkceChallenge(verifier));
+    authorizeUrl.searchParams.set("code_challenge_method", "S256");
     const response = await fetch(authorizeUrl, {
       redirect: "manual",
       headers: { apikey: supabaseKey },
     });
     const location = response.headers.get("location");
     if (!location) throw new Error("Supabase did not start the Google sign-in flow.");
-    res.writeHead(302, { location });
+    res.writeHead(302, {
+      location,
+      "set-cookie": `eztax-oauth-verifier=${encodeURIComponent(verifier)}; Max-Age=600; Path=/api/auth; HttpOnly; Secure; SameSite=Lax`,
+    });
     res.end();
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/auth/exchange") {
+    const url = new URL(req.url || "/", requestOrigin(req));
+    const code = url.searchParams.get("code");
+    const verifier = readCookie(req, "eztax-oauth-verifier");
+    if (!code || !verifier) {
+      sendJson(res, 400, { error: "Google sign-in expired. Please try again." });
+      return;
+    }
+    const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=pkce`, {
+      method: "POST",
+      headers: { apikey: supabaseKey, "content-type": "application/json" },
+      body: JSON.stringify({ auth_code: code, code_verifier: verifier }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      sendJson(res, 401, { error: payload.msg || "Could not complete Google sign-in." });
+      return;
+    }
+    const body = JSON.stringify({ session: payload });
+    res.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": Buffer.byteLength(body),
+      "set-cookie": "eztax-oauth-verifier=; Max-Age=0; Path=/api/auth; HttpOnly; Secure; SameSite=Lax",
+    });
+    res.end(body);
     return;
   }
 
