@@ -16,6 +16,7 @@ const monthNames = [
 const rowBatchSize = 14;
 const clientIdStorageKey = "eztax.clientId";
 const backupStoragePrefix = "eztax.backup.v1.";
+const authSessionStorageKey = "eztax.auth.session.v1";
 const fallbackClientId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 const state = {
@@ -39,6 +40,7 @@ const state = {
     year: "all",
     month: "all",
   },
+  authSession: null,
 };
 
 const els = {
@@ -89,6 +91,8 @@ const els = {
   cancelDelete: document.querySelector("#cancelDelete"),
   exportButton: document.querySelector("#exportButton"),
   profileButton: document.querySelector("#profileButton"),
+  signInButton: document.querySelector("#signInButton"),
+  signOutButton: document.querySelector("#signOutButton"),
   avatarInitial: document.querySelector("#avatarInitial"),
   profileDialog: document.querySelector("#profileDialog"),
   profileForm: document.querySelector("#profileForm"),
@@ -204,6 +208,31 @@ function getClientId() {
 
 function backupStorageKey() {
   return `${backupStoragePrefix}${getClientId()}`;
+}
+
+function readAuthSession() {
+  try {
+    const session = JSON.parse(localStorage.getItem(authSessionStorageKey) || "null");
+    return session?.access_token && session?.refresh_token ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAuthSession(session) {
+  state.authSession = session;
+  if (session) localStorage.setItem(authSessionStorageKey, JSON.stringify(session));
+  else localStorage.removeItem(authSessionStorageKey);
+}
+
+function captureAuthSessionFromUrl() {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const accessToken = params.get("access_token");
+  const refreshToken = params.get("refresh_token");
+  if (!accessToken || !refreshToken) return false;
+  saveAuthSession({ access_token: accessToken, refresh_token: refreshToken });
+  window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+  return true;
 }
 
 function readBrowserBackup() {
@@ -720,7 +749,9 @@ function renderProfileUi() {
   els.usdInput.name = "incomeAmount";
   els.usdSparkline.setAttribute("aria-label", `Открыть график ${incomeCurrency}`);
   els.gelSparkline.setAttribute("aria-label", `Открыть график ${localCurrency}`);
-  els.profileButton.hidden = !state.profile;
+  els.profileButton.hidden = !state.profile && !state.authSession;
+  els.signInButton.hidden = Boolean(state.authSession);
+  els.signOutButton.hidden = !state.authSession;
   els.avatarInitial.textContent = state.profile?.name?.trim()?.[0]?.toUpperCase() || "?";
 }
 
@@ -790,6 +821,7 @@ async function requestJson(url, options = {}) {
     headers: {
       "content-type": "application/json",
       "x-eztax-client-id": getClientId(),
+      ...(state.authSession?.access_token ? { authorization: `Bearer ${state.authSession.access_token}` } : {}),
       ...(options.headers || {}),
     },
   });
@@ -798,6 +830,40 @@ async function requestJson(url, options = {}) {
     throw new Error(payload.error || "Request failed.");
   }
   return payload;
+}
+
+async function refreshAuthSession() {
+  const saved = readAuthSession();
+  if (!saved) return;
+  try {
+    const payload = await requestJson("/api/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refreshToken: saved.refresh_token }),
+    });
+    saveAuthSession(payload.session);
+  } catch {
+    saveAuthSession(null);
+  }
+}
+
+function signInWithGoogle() {
+  window.location.assign("/api/auth/google");
+}
+
+function signOut() {
+  saveAuthSession(null);
+  window.location.assign("/");
+}
+
+async function claimBrowserDataForAccount() {
+  if (!state.authSession) return false;
+  const backup = readBrowserBackup();
+  const payload = await requestJson("/api/auth/claim", {
+    method: "POST",
+    body: JSON.stringify({ backup }),
+  });
+  if (payload.claimed) showToast("История привязана к Google-аккаунту");
+  return payload.claimed;
 }
 
 async function loadEntries() {
@@ -1129,6 +1195,8 @@ async function submitProfile(event) {
 els.openAddDialog.addEventListener("click", openDialog);
 els.emptyAddDialog.addEventListener("click", openDialog);
 els.profileButton.addEventListener("click", () => openProfileDialog("edit"));
+els.signInButton.addEventListener("click", signInWithGoogle);
+els.signOutButton.addEventListener("click", signOut);
 document.querySelectorAll("[data-profile-option]").forEach((button) => {
   button.addEventListener("click", () => {
     setProfileChoice(button.dataset.profileOption, button.dataset.value);
@@ -1214,6 +1282,13 @@ window.addEventListener("resize", () => {
 initFloatingFields();
 
 async function boot() {
+  captureAuthSessionFromUrl();
+  await refreshAuthSession();
+  try {
+    await claimBrowserDataForAccount();
+  } catch (error) {
+    console.warn(error);
+  }
   try {
     await loadProfile();
   } catch (error) {

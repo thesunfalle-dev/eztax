@@ -27,6 +27,7 @@
             </span>
             Добавить
           </button>
+          <button class="ghost-button sign-in-button" id="signInButton" type="button">Войти с Google</button>
           <button class="avatar-button" id="profileButton" type="button" title="Профиль" aria-label="Открыть профиль">
             <span id="avatarInitial">?</span>
           </button>
@@ -252,6 +253,7 @@
         <p class="form-error" id="profileFormError" role="alert"></p>
 
         <footer>
+          <button class="ghost-button" id="signOutButton" type="button" hidden>Выйти из аккаунта</button>
           <button class="ghost-button" id="cancelProfileDialog" type="button">Отмена</button>
           <button class="primary-button" id="saveProfile" type="submit">Сохранить</button>
         </footer>
@@ -275,6 +277,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=20260617-import-backup-1" type="module"></script>
+    <script src="/app.js?v=20260714-google-account-1" type="module"></script>
   </body>
 </html>

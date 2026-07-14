@@ -142,8 +142,35 @@ function normalizeClientId(value) {
   return defaultClientId;
 }
 
-function getClientId(req) {
-  return useSupabase ? normalizeClientId(req.headers["x-eztax-client-id"]) : defaultClientId;
+async function getRequestIdentity(req) {
+  const anonymousClientId = useSupabase ? normalizeClientId(req.headers["x-eztax-client-id"]) : defaultClientId;
+  const authorization = String(req.headers.authorization || "");
+  if (!authorization.startsWith("Bearer ")) {
+    return { clientId: anonymousClientId, anonymousClientId, user: null };
+  }
+
+  if (!useSupabase) {
+    const error = new Error("Google sign-in requires Supabase configuration.");
+    error.status = 503;
+    throw error;
+  }
+
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: { apikey: supabaseKey, authorization },
+  });
+  if (!response.ok) {
+    const error = new Error("Your sign-in session has expired. Please sign in again.");
+    error.status = 401;
+    throw error;
+  }
+  const user = await response.json();
+  return { clientId: `user_${user.id}`, anonymousClientId, user };
+}
+
+function requestOrigin(req) {
+  const protocol = String(req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000").split(",")[0].trim();
+  return `${protocol}://${host}`;
 }
 
 async function supabaseRequest(pathname, options = {}) {
@@ -985,7 +1012,82 @@ function normalizeEntry(entry) {
 }
 
 async function handleApi(req, res, pathname) {
-  const clientId = getClientId(req);
+  if (req.method === "GET" && pathname === "/api/auth/google") {
+    if (!useSupabase) {
+      sendJson(res, 503, { error: "Supabase is not configured." });
+      return;
+    }
+    const authorizeUrl = new URL(`${supabaseUrl}/auth/v1/authorize`);
+    authorizeUrl.searchParams.set("provider", "google");
+    authorizeUrl.searchParams.set("redirect_to", requestOrigin(req));
+    const response = await fetch(authorizeUrl, {
+      redirect: "manual",
+      headers: { apikey: supabaseKey },
+    });
+    const location = response.headers.get("location");
+    if (!location) throw new Error("Supabase did not start the Google sign-in flow.");
+    res.writeHead(302, { location });
+    res.end();
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/auth/refresh") {
+    if (!useSupabase) {
+      sendJson(res, 503, { error: "Supabase is not configured." });
+      return;
+    }
+    const body = await readBody(req);
+    const refreshToken = String(body.refreshToken || "");
+    if (!refreshToken) {
+      sendJson(res, 400, { error: "Refresh token is required." });
+      return;
+    }
+    const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: { apikey: supabaseKey, "content-type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      sendJson(res, 401, { error: payload.msg || "Your sign-in session has expired." });
+      return;
+    }
+    sendJson(res, 200, { session: payload });
+    return;
+  }
+
+  const identity = await getRequestIdentity(req);
+  const clientId = identity.clientId;
+
+  if (req.method === "GET" && pathname === "/api/auth/session") {
+    sendJson(res, 200, { user: identity.user ? { id: identity.user.id, email: identity.user.email } : null });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/auth/claim") {
+    if (!identity.user) {
+      sendJson(res, 401, { error: "Sign in with Google before moving data to your account." });
+      return;
+    }
+    const existingEntries = await readEntries(clientId);
+    const existingProfile = await readProfile(clientId);
+    if (existingEntries.length > 0 || existingProfile) {
+      sendJson(res, 200, { profile: existingProfile, entries: existingEntries, claimed: false });
+      return;
+    }
+    const body = await readBody(req);
+    const backup = body.backup || {};
+    const sourceProfile = backup.profile || (await readProfile(identity.anonymousClientId));
+    const sourceEntries = Array.isArray(backup.entries) ? backup.entries : await readEntries(identity.anonymousClientId);
+    if (!sourceProfile) {
+      sendJson(res, 200, { profile: null, entries: [], claimed: false });
+      return;
+    }
+    const profile = await writeProfile(sourceProfile, clientId);
+    const entries = await writeEntries(sourceEntries || [], clientId);
+    sendJson(res, 200, { profile, entries, claimed: true });
+    return;
+  }
 
   if (req.method === "GET" && pathname === "/api/profile") {
     const profile = await readProfile(clientId);
