@@ -363,14 +363,10 @@ function nextMonth(entries) {
 
 function estimatedIncome(entry) {
   if (entry.incomeAmount != null) return Number(entry.incomeAmount);
-  if (
-    !state.currentRate?.rate ||
-    entry.localCurrency !== profileLocalCurrency() ||
-    entry.incomeCurrency !== profileIncomeCurrency()
-  ) {
+  if (!entry.rate || entry.localCurrency !== profileLocalCurrency() || entry.incomeCurrency !== profileIncomeCurrency()) {
     return null;
   }
-  return Number(entry.localAmount) / Number(state.currentRate.rate);
+  return Number(entry.localAmount) / Number(entry.rate);
 }
 
 function activeEntries() {
@@ -441,7 +437,7 @@ function populateFilters() {
 
 function rowTemplate(entry) {
   const income = estimatedIncome(entry);
-  const incomeNote = entry.incomeAmount == null && state.currentRate?.rate ? "по текущему курсу" : "";
+  const incomeNote = entry.incomeAmount == null && entry.rate ? "по курсу на дату" : "";
   const tr = document.createElement("tr");
   tr.innerHTML = `
     <td>
@@ -455,7 +451,7 @@ function rowTemplate(entry) {
     <td><strong>${money(entry.localAmount, entry.localCurrency || profileLocalCurrency())}</strong></td>
     <td><strong>${money(entry.taxLocal, entry.localCurrency || profileLocalCurrency())}</strong></td>
     <td class="meta-column">
-      <strong>${entry.rate ? entry.rate.toFixed(4) : state.currentRate?.rate?.toFixed(4) || "—"}</strong>
+      <strong>${entry.rate ? entry.rate.toFixed(4) : "—"}</strong>
       <span class="cell-note">${sourceLabel(entry)}</span>
     </td>
     <td class="row-actions">

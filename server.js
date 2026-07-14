@@ -998,8 +998,11 @@ function normalizeEntry(entry) {
   const config = countryConfigs[country] || countryConfigs.GE;
   const incomeCurrency = entry.incomeCurrency || "USD";
   const localCurrency = entry.localCurrency || config.localCurrency;
-  const incomeAmount = entry.incomeAmount ?? entry.usdAmount;
   const localAmount = entry.localAmount ?? entry.gelAmount;
+  const incomeAmount =
+    entry.incomeAmount ??
+    entry.usdAmount ??
+    (entry.rate != null && localAmount != null ? toMoney(Number(localAmount) / Number(entry.rate)) : null);
   const taxLocal = entry.taxLocal ?? entry.taxGel;
 
   return {
